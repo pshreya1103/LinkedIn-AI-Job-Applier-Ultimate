@@ -193,8 +193,20 @@ class LinkedInJobManager(BaseJobManager):
                         break
                 except StopRequested:
                     raise
-                except Exception:
+                except Exception as exc:
                     tb_str = traceback.format_exc()
+                    err_str = str(exc)
+                    # If the browser/driver connection is dead, stop immediately —
+                    # retrying will just produce the same error for every remaining job.
+                    if "Connection closed while reading from the driver" in err_str or (
+                        "TargetClosedError" in type(exc).__name__ or "TargetClosedError" in err_str
+                    ):
+                        logger.error(
+                            "Browser connection lost — stopping application loop. "
+                            "Restart the bot to reconnect."
+                        )
+                        result = "Error"
+                        break
                     logger.error(f"Unknown error on the page: {url}\n{tb_str}")
                     await debug_capture(self.page, "apply_loop_error")
                     # counter of repeated errors, if too many errors in a row -
@@ -274,15 +286,19 @@ class LinkedInJobManager(BaseJobManager):
                     job_is_interesting = True
                     score = 0
                     reasoning = "Monkey mode"
+                    skills = []
                     logger.info(
                         "Monkey mode is enabled and Collect info mode is disabled, applying to all vacancies"
                     )
                 else:
-                    (
-                        job_is_interesting,
-                        score,
-                        reasoning,
-                    ) = self.llm_answerer_component.job_is_interesting(job.model_dump())
+                    result = self.llm_answerer_component.job_is_interesting(job.model_dump())
+                    if result is None:
+                        logger.error("LLM error while evaluating job interest, skipping")
+                        await self._handle_apply_result(
+                            ("Error", "LLM error evaluating job interest"), job
+                        )
+                        return "Error"
+                    job_is_interesting, score, reasoning, skills = result
                 evaluation["interest_score"] = int(score) if str(score).isdigit() else 0
                 evaluation["interest_reason"] = reasoning
                 if not job_is_interesting:
@@ -291,14 +307,18 @@ class LinkedInJobManager(BaseJobManager):
                     )
                     await self._handle_apply_result(("Skip", reasoning), job, evaluation=evaluation)
                     return "Skip"
-                # update the list of required skills for the vacancy and save job info to file
-                # only if the vacancy was scored and considered interesting
+                # update skill stats and save job info for interesting jobs
                 if int(score) > 0:
-                    # extract skills from the vacancy
-                    job.skills = self._extract_skills_from_vacancy(job)
+                    self.job_key_skills = skills
+                    job.skills = (
+                        str(skills)
+                        .replace("[", "")
+                        .replace("]", "")
+                        .replace("'", "")
+                        .replace('"', "")
+                    )
                     evaluation["skills"] = self.job_key_skills
                     self._update_skill_stat(self.job_key_skills)
-                    # set the vacancy to answerer
                     if COLLECT_INFO_MODE is True:
                         self._save_interesting_job(job, score, reasoning)
 
@@ -345,9 +365,15 @@ class LinkedInJobManager(BaseJobManager):
             time_left = int(minimum_job_time - time.time())
             if time_left > 0:
                 await async_pause(time_left, time_left + 5)
-            await new_page.close()
+            try:
+                await new_page.close()
+            except Exception as e:
+                logger.debug(f"Could not close job tab (browser may be closed): {e}")
             self.page = original_page
-            await self.page.bring_to_front()
+            try:
+                await self.page.bring_to_front()
+            except Exception as e:
+                logger.debug(f"bring_to_front skipped (browser or page closed): {e}")
 
     async def easy_apply(self, job: Job) -> Tuple[str, str]:
         """Apply to the vacancy using LinkedIn Easy Apply functionality (async)"""

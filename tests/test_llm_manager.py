@@ -910,11 +910,11 @@ class TestGPTAnswerer:
         mock_job,
     ):
         """Test GPTAnswerer job_is_interesting returns True"""
-        # Setup mock chain for job_is_interesting
         mock_chain = MagicMock()
-        mock_chain.invoke.return_value = "Score: 85\nReasoning: Great match for skills"
+        mock_chain.invoke.return_value = (
+            '{"score": 85, "reasoning": "Great match for skills", "skills": ["python", "docker"]}'
+        )
 
-        # Setup mock chain for summarize_job_description
         mock_summarize_chain = MagicMock()
         mock_summarize_chain.invoke.return_value = "Brief job description"
 
@@ -925,11 +925,12 @@ class TestGPTAnswerer:
         answerer.set_job(mock_job)
         answerer.search_parameters = "Remote: True"
 
-        is_interesting, score, reasoning = answerer.job_is_interesting(mock_job)
+        is_interesting, score, reasoning, skills = answerer.job_is_interesting(mock_job)
 
         assert is_interesting is True
-        assert score == "85"
+        assert score == 85
         assert "Great match" in reasoning
+        assert "python" in skills
 
     @patch("src.llm.llm_manager.JOB_IS_INTERESTING_THRESH", 70)
     @patch("src.llm.llm_manager.AIAdapter")
@@ -945,11 +946,11 @@ class TestGPTAnswerer:
         mock_job,
     ):
         """Test GPTAnswerer job_is_interesting returns False"""
-        # Setup mock chain for job_is_interesting
         mock_chain = MagicMock()
-        mock_chain.invoke.return_value = "Score: 50\nReasoning: Not a good fit"
+        mock_chain.invoke.return_value = (
+            '{"score": 50, "reasoning": "Not a good fit", "skills": ["java"]}'
+        )
 
-        # Setup mock chain for summarize_job_description
         mock_summarize_chain = MagicMock()
         mock_summarize_chain.invoke.return_value = "Brief job description"
 
@@ -960,10 +961,10 @@ class TestGPTAnswerer:
         answerer.set_job(mock_job)
         answerer.search_parameters = "Remote: True"
 
-        is_interesting, score, reasoning = answerer.job_is_interesting(mock_job)
+        is_interesting, score, reasoning, skills = answerer.job_is_interesting(mock_job)
 
         assert is_interesting is False
-        assert score == "50"
+        assert score == 50
         assert "Not a good fit" in reasoning
 
     @patch("src.llm.llm_manager.AIAdapter")

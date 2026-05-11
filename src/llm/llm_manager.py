@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import textwrap
@@ -46,6 +47,18 @@ class AIModel(ABC):
         pass
 
 
+def _gemini_supports_thinking_level(model_name: str) -> bool:
+    """Only some Gemini models accept ChatGoogleGenerativeAI thinking_level (e.g. not Flash-Lite).
+    gemini-2.5-flash returns INVALID_ARGUMENT when thinking_level is set via langchain-google-genai,
+    so it is excluded here until the library adds proper support."""
+    m = model_name.lower().replace("google/", "")
+    if "flash-lite" in m or "flash_lite" in m:
+        return False
+    if m.startswith("gemini-2.5-flash"):
+        return False
+    return "gemini-2.5-pro" in m
+
+
 class GeminiModel(AIModel):
     """Get access to Gemini model"""
 
@@ -58,11 +71,10 @@ class GeminiModel(AIModel):
             client_args={"proxy": llm_proxy}, async_client_args={"proxy": llm_proxy}
         )
         self.google_api_key = api_key
-        self.model = ChatGoogleGenerativeAI(
+        chat_kwargs = dict(
             model=llm_model,
             google_api_key=self.google_api_key,
             temperature=TEMPERATURE,
-            thinking_level="minimal",
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -71,6 +83,9 @@ class GeminiModel(AIModel):
             },
             http_options=http_options,
         )
+        if _gemini_supports_thinking_level(llm_model):
+            chat_kwargs["thinking_level"] = "minimal"
+        self.model = ChatGoogleGenerativeAI(**chat_kwargs)
 
     def invoke(self, prompt: ChatPromptTemplate) -> BaseMessage:
         logger.info("Got access to model via Gemini API")
@@ -440,6 +455,22 @@ class LoggerChatModel:
                     )
                     pause(30, 31)
 
+            except Exception as e:
+                err_str = str(e)
+                # Catch Google/Gemini RESOURCE_EXHAUSTED (429) errors that bypass httpx
+                if "RESOURCE_EXHAUSTED" in err_str or (
+                    "429" in err_str and ("rate" in err_str.lower() or "quota" in err_str.lower())
+                ):
+                    retry_match = re.search(r"retry in (\d+(?:\.\d+)?)", err_str.lower())
+                    wait_time = float(retry_match.group(1)) + 2 if retry_match else 60
+                    logger.warning(
+                        f"LLM rate limit / quota exceeded (RESOURCE_EXHAUSTED). "
+                        f"Waiting {wait_time:.1f}s before retry..."
+                    )
+                    pause(wait_time, wait_time + 1)
+                else:
+                    raise
+
     def parse_llmresult(self, llmresult: AIMessage) -> Dict[str, Dict]:
         """Parse LLM result"""
         logger.info("Parsing LLM result")
@@ -447,6 +478,11 @@ class LoggerChatModel:
         try:
             if hasattr(llmresult, "usage_metadata") and llmresult.usage_metadata is not None:
                 content = llmresult.content
+                if isinstance(content, list):
+                    content = " ".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part)
+                        for part in content
+                    )
                 response_metadata = llmresult.response_metadata
                 id_ = llmresult.id
                 usage_metadata = llmresult.usage_metadata
@@ -469,6 +505,11 @@ class LoggerChatModel:
             else:
                 try:
                     content = llmresult.content
+                    if isinstance(content, list):
+                        content = " ".join(
+                            part.get("text", "") if isinstance(part, dict) else str(part)
+                            for part in content
+                        )
                     response_metadata = llmresult.response_metadata
                     id_ = llmresult.id
 
@@ -501,8 +542,14 @@ class LoggerChatModel:
                     tb_str = traceback.format_exc()
                     logger.error(f"Error processing result without usage_metadata: {tb_str}")
                     # Create a minimal parsed result with defaults
+                    _raw = llmresult.content if hasattr(llmresult, "content") else ""
+                    if isinstance(_raw, list):
+                        _raw = " ".join(
+                            part.get("text", "") if isinstance(part, dict) else str(part)
+                            for part in _raw
+                        )
                     parsed_result = {
-                        "content": llmresult.content if hasattr(llmresult, "content") else "",
+                        "content": _raw,
                         "response_metadata": {"model_name": "unknown", "finish_reason": "unknown"},
                         "id": llmresult.id if hasattr(llmresult, "id") else "",
                         "usage_metadata": {
@@ -534,7 +581,8 @@ class GPTAnswerer:
 
     def __init__(self, llm_api_key: str = None, llm_proxy: str = None, llm_api_url: str = None):
         self.job = None
-        self.job_readable = ""
+        self._job_readable: str | None = ""
+        self._job_raw_text: str = ""
         self.current_job_context = {"job_url": "", "job_title": "", "company_name": ""}
         self.job_llm_time_seconds: Dict[str, float] = {}
         self._job_llm_lock = threading.Lock()
@@ -632,6 +680,29 @@ class GPTAnswerer:
 
         return html_response.strip()
 
+    @property
+    def job_readable(self) -> str:
+        if self._job_readable is None:
+            self._job_readable = (
+                self.summarize_job_description(self._job_raw_text) if self._job_raw_text else ""
+            )
+        return self._job_readable
+
+    @job_readable.setter
+    def job_readable(self, value: str) -> None:
+        self._job_readable = value
+
+    @staticmethod
+    def _extract_json_from_response(text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            newline = text.find("\n")
+            if newline != -1:
+                text = text[newline + 1 :]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+
     def set_resume(self, resume_structured: Dict[str, Any], resume_readable: str) -> None:
         """Add resume for analysis."""
         logger.info("Adding resume")
@@ -702,10 +773,16 @@ class GPTAnswerer:
         self._set_current_job_context(job)
         text = transform_vacancy_data(job)
         if is_test:
-            self.job_readable = text
+            self._job_raw_text = text
+            self._job_readable = text
         else:
-            self.job_readable = self.summarize_job_description(text)
-        logger.info(f"Adding job description: {self.job_readable}")
+            self._job_raw_text = text
+            self._job_readable = (
+                None  # lazy: summarized only when cover letter / resume gen needs it
+            )
+        logger.info(
+            f"Job set: {job.get('job_title', 'unknown')} at {job.get('company_name', 'unknown')}"
+        )
 
     def set_search_parameters(self, parameters: dict) -> None:
         """Set job search parameters."""
@@ -877,9 +954,15 @@ class GPTAnswerer:
         """Create brief job description"""
         logger.info(f"Creating brief job description: '{text}'")
         chain = self.chains["summarize_job_description"]
-        output = chain.invoke({"text": text})
-        logger.debug(f"Generated brief description: {output}")
-        return output
+        try:
+            output = chain.invoke({"text": text})
+            logger.debug(f"Generated brief description: {output}")
+            return output
+        except Exception as e:
+            logger.warning(
+                f"summarize_job_description LLM call failed ({e!r}), using raw text as fallback"
+            )
+            return text[:2000] if len(text) > 2000 else text
 
     def answer_question_date(self, question: str, previous_questions: list[str]) -> str:
         """Answer a date question and return the result in MM/DD/YYYY format"""
@@ -1062,10 +1145,10 @@ class GPTAnswerer:
         logger.info(f"Best options: {best_options}")
         return best_options
 
-    def job_is_interesting(self, job: Dict[str, Any]) -> bool | None:
+    def job_is_interesting(self, job: Dict[str, Any]) -> Tuple[bool, int, str, List[str]] | None:
         """
-        Ask LLM if the job is interesting with our resume, skills and interests.
-        Return True if the job is interesting, False otherwise.
+        Ask LLM if the job is interesting and extract required skills in one call.
+        Returns (is_interesting, score, reasoning, skills) or None on LLM error.
         """
         chain = self.chains["job_is_interesting"]
         job_description = transform_vacancy_data(job)
@@ -1083,18 +1166,20 @@ class GPTAnswerer:
             logger.error(f"Error calling LLM\n{tb_str}")
             return None
         logger.debug(f"LLM response: '{output}'")
-        # parse the LLM response
         try:
-            score = re.search(r"Score: (\d+)", output).group(1)
-            reasoning = re.search(r"Reasoning: (.+)", output, re.DOTALL).group(1)
-        except AttributeError:
-            logger.error(f"LLM returned an incorrect response:\n{output}")
-            return False
+            cleaned = self._extract_json_from_response(output)
+            data = json.loads(cleaned)
+            score = int(data["score"])
+            reasoning = str(data["reasoning"])
+            skills = [str(s) for s in data.get("skills", [])]
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            logger.error(f"LLM returned an unparseable response:\n{output}")
+            return False, 0, "Error parsing response", []
         logger.info(f"Job interest score: {score}")
-        if int(score) < JOB_IS_INTERESTING_THRESH:
+        if score < JOB_IS_INTERESTING_THRESH:
             logger.info(f"Job is not interesting: {reasoning}")
-            return False, score, reasoning
-        return True, score, reasoning
+            return False, score, reasoning, skills
+        return True, score, reasoning, skills
 
     def write_cover_letter(self) -> str:
         """

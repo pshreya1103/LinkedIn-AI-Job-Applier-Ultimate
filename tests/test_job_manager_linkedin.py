@@ -887,7 +887,7 @@ class TestApplyJob:
         mock_page.context.new_page = AsyncMock(return_value=new_page)
 
         mock_llm = MagicMock()
-        mock_llm.job_is_interesting.return_value = (True, 80, "Great fit")
+        mock_llm.job_is_interesting.return_value = (True, 80, "Great fit", [])
         mock_llm.set_job = MagicMock()
         manager.llm_answerer_component = mock_llm
 

@@ -39,7 +39,7 @@ If there is no information about gender, TRY to infer it from the name.
 {resume}
 """
 
-# Prompt for extracting all skills required for a vacancy
+# Prompt for extracting all skills required for a vacancy (kept for standalone use)
 extract_skills_from_vacancy = """
 You are an expert in HR and job analysis. Extract all skills required for the role from the job description.
 
@@ -62,11 +62,11 @@ You are an expert in HR and job analysis. Extract all skills required for the ro
 ```
 """
 
-# Prompt for determining the degree of interest in the vacancy
+# Prompt for determining job interest AND extracting required skills in one call
 job_is_interesting = """
 You are an expert in recruitment.
-Evaluate whether the provided resume meets the requirements specified in the job description and whether job description meets the search parameters.
-Determine if the candidate is suitable for this job based on the provided information.
+Evaluate whether the resume meets the job requirements and search parameters, and extract all skills required by the job.
+
 ##Job Description
 ```
 {job_description}
@@ -79,21 +79,25 @@ Determine if the candidate is suitable for this job based on the provided inform
 ```
 {search_parameters}
 ```
-##Additional Rules
-- Identify key requirements from the job description, distinguishing strict requirements (mandatory) from soft requirements (desirable).
-- Determine relevant qualifications from the resume and skills list.
-- Compare qualifications to the requirements, ensuring all strict requirements are met.
-- A 1-year difference in experience is allowed if applicable, as experience is typically a strict requirement.
-- Assign a suitability score from 1 to 100, where 1 means that candidate meets no requirements, and 100 means that candidate meets all requirements.
-- If at least one of the skills levels in resume is significanly lower than the requirements (e.g. required level is "advanced" but in resume it is "elementary"), subtract 20 points from the overall score.
-- If vacancy requires year or less of experience and candidate has 4 or more years of experience, subtract 10 points from the overall score.
-- If the job aligns with one or more of the candidate’s interests, add 10 point to the overall score.
-- If vacancy doesn't match one or more of search parameters, subtract 20 points from the overall score for each search parameter that it doesn't match.
-- Provide a brief justification for the score, indicating which requirements are met and which are not.
-Output format (strictly follow this format):
-Score: [numeric score]
-Reasoning: [brief explanation]
-Do not include anything else in the response beyond the score and reasoning.
+##Scoring Rules
+- Identify key requirements, distinguishing strict (mandatory) from soft (desirable).
+- Determine relevant qualifications from the resume.
+- Compare qualifications to requirements; all strict requirements must be met.
+- A 1-year experience gap is allowed for experience requirements.
+- Assign a suitability score from 1 to 100 (1 = meets no requirements, 100 = meets all).
+- If any skill level in the resume is significantly lower than required, subtract 20 points.
+- If the vacancy requires ≤1 year of experience and the candidate has ≥4 years, subtract 10 points.
+- If the job aligns with the candidate’s interests, add 10 points.
+- Subtract 20 points per search parameter mismatch.
+
+##Skills Extraction Rules
+- Include both hard skills (languages, frameworks, tools) and soft skills (communication, leadership).
+- Normalize to canonical lowercase names; no duplicates (e.g. "python", "docker", "sql").
+- Acronyms keep their case (e.g. "AWS", "SQL", "NLP").
+- Exclude benefits, perks, and generic phrases.
+
+Output a single JSON object with no markdown fences and no extra text:
+{{"score": <integer 1-100>, "reasoning": "<one or two sentence justification>", "skills": ["skill1", "skill2"]}}
 """
 
 # Prompt for answering textual questions
@@ -387,8 +391,7 @@ that these words must be included).
 """
 
 # Resume builder prompts
-prompt_header = (
-    """
+prompt_header = """
 Act as an HR expert and resume writer specializing in ATS-friendly resumes. Your task is to create a professional and polished header for the resume. The header should:
 
 1. Contact Information: Include your full name, city, state/area/region (if applicable), and country, phone number, email address, LinkedIn profile, and GitHub profile. Exclude any information that is not provided.
@@ -400,13 +403,10 @@ To implement this:
 
 ##My information
   {personal_information}
-"""
-    + prompt_header_template
-)
+""" + prompt_header_template
 
 
-prompt_education = (
-    """
+prompt_education = """
 Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to articulate the educational background for a resume. For each educational entry, ensure you include:
 
 1. Institution Name and Location: Specify the university or educational institution’s name and location.
@@ -425,13 +425,10 @@ To implement this, follow these steps:
 
 ##Job Description
   {job_description}
-"""
-    + prompt_education_template
-)
+""" + prompt_education_template
 
 
-prompt_working_experience = (
-    """
+prompt_working_experience = """
 Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to detail the work experience for a resume, tailoring it to match the target job requirements. For each job entry, ensure you include:
 
 1. Company Name and Location: Provide the name of the company and its location.
@@ -451,13 +448,10 @@ To implement this:
 
 ##Job Description
   {job_description}
-"""
-    + prompt_working_experience_template
-)
+""" + prompt_working_experience_template
 
 
-prompt_side_projects = (
-    """
+prompt_side_projects = """
 Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to highlight notable side projects that are most relevant to the target job. For each project, ensure you include:
 
 1. Project Name and Link: Provide the name of the project and include a link to the GitHub repository or project page.
@@ -475,13 +469,10 @@ To implement this:
 
 ##Job Description
   {job_description}
-"""
-    + prompt_side_projects_template
-)
+""" + prompt_side_projects_template
 
 
-prompt_achievements = (
-    """
+prompt_achievements = """
 Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to list significant achievements that are most relevant to the target job. For each achievement, ensure you include:
 
 1. Award or Recognition: Clearly state the name of the award, recognition, scholarship, or honor.
@@ -498,13 +489,10 @@ To implement this:
 
 ##Job Description
   {job_description}
-"""
-    + prompt_achievements_template
-)
+""" + prompt_achievements_template
 
 
-prompt_certifications = (
-    """
+prompt_certifications = """
 Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to list significant certifications that are most relevant to the target job. For each certification, ensure you include:
 
 1. Certification Name: Clearly state the name of the certification.
@@ -521,13 +509,10 @@ To implement this:
 
 ##Job Description
   {job_description}
-"""
-    + prompt_certifications_template
-)
+""" + prompt_certifications_template
 
 
-prompt_additional_skills = (
-    """
+prompt_additional_skills = """
 Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to list additional skills that are most relevant to the target job. For each skill, ensure you include:
 
 1. Skill Category: Clearly state the category or type of skill.
@@ -547,9 +532,7 @@ To implement this:
 
 ##Job Description
   {job_description}
-"""
-    + prompt_additional_skills_template
-)
+""" + prompt_additional_skills_template
 
 # Prompt for resume improvement recommendations
 resume_improve = """

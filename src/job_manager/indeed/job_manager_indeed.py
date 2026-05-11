@@ -128,8 +128,18 @@ class IndeedJobManager(BaseJobManager):
                         break
                 except StopRequested:
                     raise
-                except Exception:
+                except Exception as exc:
                     tb_str = traceback.format_exc()
+                    err_str = str(exc)
+                    if "Connection closed while reading from the driver" in err_str or (
+                        "TargetClosedError" in type(exc).__name__ or "TargetClosedError" in err_str
+                    ):
+                        logger.error(
+                            "Browser connection lost — stopping application loop. "
+                            "Restart the bot to reconnect."
+                        )
+                        result = "Error"
+                        break
                     logger.error(f"Unknown error on the page: {self.page.url}\n{tb_str}")
                     await debug_capture(self.page, "apply_loop_error")
                     # counter of repeated errors, if too many errors in a row -
@@ -194,8 +204,7 @@ class IndeedJobManager(BaseJobManager):
 
     async def _scroll_left_panel(self) -> None:
         """Scroll the full page to trigger lazy-loading of job cards"""
-        await self.page.evaluate(
-            """
+        await self.page.evaluate("""
             () => new Promise((resolve) => {
                 const distance = document.body.scrollHeight;
                 const durationMs = 2000;
@@ -208,8 +217,7 @@ class IndeedJobManager(BaseJobManager):
                 }
                 requestAnimationFrame(step);
             })
-            """
-        )
+            """)
         await async_pause(1, 2)
         await self.page.evaluate("() => window.scrollTo(0, 0)")
 
@@ -252,7 +260,7 @@ class IndeedJobManager(BaseJobManager):
 
             if MONKEY_MODE is True and COLLECT_INFO_MODE is False:
                 job_is_interesting = True
-                score, reasoning = 0, "Monkey mode"
+                score, reasoning, skills = 0, "Monkey mode", []
                 logger.info(
                     "Monkey mode is enabled and Collect info mode is disabled, applying to all vacancies"
                 )
@@ -262,7 +270,7 @@ class IndeedJobManager(BaseJobManager):
                     apply_result = ("Error", "Error while determining if job is interesting")
                     await self._handle_apply_result(apply_result, job, evaluation=evaluation)
                     return "Error"
-                job_is_interesting, score, reasoning = interest_result
+                job_is_interesting, score, reasoning, skills = interest_result
 
             evaluation["interest_score"] = int(score) if str(score).isdigit() else 0
             evaluation["interest_reason"] = reasoning
@@ -271,14 +279,14 @@ class IndeedJobManager(BaseJobManager):
                 logger.info(f"Skipping uninteresting job: {job.job_title} at {job.company_name}")
                 await self._handle_apply_result(("Skip", reasoning), job, evaluation=evaluation)
                 return "Skip"
-            # update the list of required skills for the vacancy and save job info to file
-            # only if the vacancy was scored and considered interesting
+            # update skill stats and save job info for interesting jobs
             if int(score) > 0:
-                # extract skills from the vacancy
-                job.skills = self._extract_skills_from_vacancy(job)
+                self.job_key_skills = skills
+                job.skills = (
+                    str(skills).replace("[", "").replace("]", "").replace("'", "").replace('"', "")
+                )
                 self._update_skill_stat(self.job_key_skills)
                 evaluation["skills"] = self.job_key_skills
-                # set the vacancy to answerer
                 if COLLECT_INFO_MODE is True:
                     self._save_interesting_job(job, score, reasoning)
 
@@ -320,8 +328,14 @@ class IndeedJobManager(BaseJobManager):
             time_left = int(minimum_job_time - time.time())
             if time_left > 0:
                 await async_pause(time_left, time_left + 1)
-            await new_page.close()
-            await self.page.bring_to_front()
+            try:
+                await new_page.close()
+            except Exception as e:
+                logger.debug(f"Could not close job tab (browser may be closed): {e}")
+            try:
+                await self.page.bring_to_front()
+            except Exception as e:
+                logger.debug(f"bring_to_front skipped (browser or page closed): {e}")
 
     async def easy_apply(self, job: Job, page: Any = None) -> Tuple[str, str]:
         """Delegate application to IndeedEasyApplier"""
