@@ -54,7 +54,7 @@ In this mode app applies only the jobs with Easy Apply
 If this mode is deactivated, app will apply to the jobs with Easy Apply and try to apply to the jobs with 3rd party applications
 WARNING: applying to the jobs with 3rd party applications is not guaranteed to be successful, but is guaranteed to consume at least 10-100x more tokens
 """
-EASY_APPLY_ONLY_MODE = True
+EASY_APPLY_ONLY_MODE = False
 
 """
 If enabled for LinkedIn, ignores positions in search_config.yaml and processes
@@ -73,7 +73,7 @@ If empty string - a new resume is generated for each vacancy.
 If set - the file at this path is used as-is for every application.
 Example: data/resumes/resume.pdf
 """
-READY_MADE_RESUME_PATH = ""
+READY_MADE_RESUME_PATH = "data/resumes/generic_resume/Shreya_Pandey_cv2026.pdf"
 """
 Optional path to a photo file for LinkedIn Easy Apply image upload fields.
 If empty string - the bot will try to reuse your visible LinkedIn profile photo.
@@ -97,7 +97,7 @@ RESUME_STYLE = None
 If LLM evaluated the 'interest' level of the job not below this threshold - the job is considered interesting for application.
 Otherwise not.
 """
-JOB_IS_INTERESTING_THRESH = 70
+JOB_IS_INTERESTING_THRESH = 20
 
 """Minimum time spent on one job application"""
 MINIMUM_WAIT_TIME_SEC = 10

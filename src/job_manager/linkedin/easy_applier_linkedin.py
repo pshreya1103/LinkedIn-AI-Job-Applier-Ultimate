@@ -62,6 +62,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
         self.current_job = None
         self.test_mode = test_mode
         self.previous_question_texts = []
+        self.submitted_resume_path = None
         logger.info("LinkedInEasyApplier initialized successfully")
 
     def set_page(self, page: Page) -> None:
@@ -1128,8 +1129,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                 question_text = ""
 
             # Extract options text from radio buttons and their labels
-            options = await section.locator(",".join(radio_selectors)).evaluate_all(
-                """els => {
+            options = await section.locator(",".join(radio_selectors)).evaluate_all("""els => {
                     const seen = new Set();
                     return els.reduce((acc, e) => {
                         if (e.id && !seen.has(e.id)) {
@@ -1140,8 +1140,7 @@ class LinkedInEasyApplier(BaseEasyApplier):
                         }
                         return acc;
                     }, []);
-                }"""
-            )
+                }""")
             options = list(dict.fromkeys(options))
 
             if not options:

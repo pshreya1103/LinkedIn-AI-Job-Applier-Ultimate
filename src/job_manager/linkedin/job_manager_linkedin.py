@@ -13,6 +13,7 @@ from config.app_config import (
     MAX_APPLIES_NUM,
     MINIMUM_WAIT_TIME_SEC,
     MONKEY_MODE,
+    NON_EASY_APPLY_ONLY_MODE,
     TEST_MODE,
 )
 from config.constants import COVER_LETTER_DIR, OUTPUT_DIR_LINKEDIN, RESUME_DIR, SEARCH_CONFIG_FILE
@@ -243,7 +244,7 @@ class LinkedInJobManager(BaseJobManager):
         try:
             await new_page.goto(vacancy["url"], wait_until="domcontentloaded")
             logger.info(f"Navigated to job URL: {vacancy['url']}")
-            await async_pause(3, 4)
+            await async_pause(1.5, 2.5)
 
             # scrape the vacancy
             job = await self._get_detailed_job_description()
@@ -264,14 +265,12 @@ class LinkedInJobManager(BaseJobManager):
                     reason += "Job description is empty\n"
                 apply_result = "Skip", reason
                 logger.warning(f"Job is not valid for application, skipping:\n{reason}")
-                await async_pause(1, 2)
                 await self._handle_apply_result(apply_result, job)
                 return "Error"
 
             if self._is_blacklisted(sanitize_text(company_name)):
                 apply_result = "Skip", "Vacancy in the blacklist"
                 logger.warning("Vacancy in the blacklist, skipping")
-                await async_pause(1, 2)
                 await self._handle_apply_result(apply_result, job)
                 return "Skip"
 
@@ -279,7 +278,6 @@ class LinkedInJobManager(BaseJobManager):
             if is_seen:
                 apply_result = "Skip", reason
                 logger.warning(f"Skipping the vacancy for the reason: {reason}")
-                await async_pause(1, 2)
             else:
                 if MONKEY_MODE is True and COLLECT_INFO_MODE is False:
                     # in 'monkey mode' any vacancy is considered interesting
@@ -339,6 +337,9 @@ class LinkedInJobManager(BaseJobManager):
                             apply_result = "Skip", "Test mode"
                         else:
                             apply_result = await self.llm_agent_component.apply_to_job(apply_url)
+                    elif NON_EASY_APPLY_ONLY_MODE:
+                        logger.info("Non-Easy Apply only mode — skipping Easy Apply job")
+                        apply_result = "Skip", "Non-Easy Apply only mode"
                     else:
                         apply_result = await self.easy_apply(job)
                 else:
@@ -874,7 +875,7 @@ class LinkedInJobManager(BaseJobManager):
             return False
 
         self.page_num += 1
-        await async_pause(2, 3)
+        await async_pause(1, 2)
         return True
 
 
